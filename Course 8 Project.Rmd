@@ -1,0 +1,219 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+  author: Gerrie van der Merwe
+---
+Machine Learning - Course Project
+============================================
+
+
+# The Project
+### Description
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the matter in which they did the exercise with the outcome variable "classe".
+
+### Steps
+The following steps were taken to get to the solution for this project:
+
+- Getting and cleaning the data
+
+- Exploratory data analysis
+
+- Preprocessing the data
+
+- Machine learning
+
+- Final Model
+
+### Executive Summary
+
+- Some steps were taken to remove columns with too many missing values
+
+- PCA was performed to reduce the number of variables to 38 variables.
+
+- Final model chosen was a Gradient Boosting Model with accuracy 95% on the training set and 93% on the validation set.
+
+
+# Getting and cleaning the data
+### The Program
+```{r, warning=FALSE, tidy=TRUE, message=FALSE}
+# Load the data
+Training_Raw1 <- read.csv("C:/Coursera/8. Machine Learning/Raw Data/pml-training.csv")
+Testing_Raw <- read.csv("C:/Coursera/8. Machine Learning/Raw Data/pml-testing.csv")
+
+# Check dimensions of the data
+dim(Training_Raw1)
+dim(Testing_Raw)
+
+# Convert all variables to numeric
+for (i in 8:(dim(Training_Raw1)[2]-1)) {
+  Training_Raw1[,i] <- as.numeric(Training_Raw1[,i])
+  Testing_Raw[,i] <- as.numeric(Testing_Raw[,i])
+}
+
+# Create a validation set, I'm keeping the test set provided as my out of time sample
+library(caret)
+set.seed(1254)
+inTrain = createDataPartition(Training_Raw1$classe, p = 0.75)[[1]]
+Training_Raw = Training_Raw1[ inTrain,]
+Validation_Raw = Training_Raw1[-inTrain,]
+
+# Check for missing values
+check1 <- complete.cases(Training_Raw)
+check2 <- complete.cases(Testing_Raw)
+check3 <- complete.cases(Validation_Raw)
+
+#dim(check1)
+#dim(check2)
+#dim(check3)
+
+# Remove columns where more than 75% are missing
+col_filter <- sapply(Training_Raw, function(x) sum(is.na(x)))
+col_filter2 <- (col_filter > (dim(Training_Raw))[1]*0.75)
+col_filter3 <- as.numeric(which(unlist(col_filter2)))
+
+
+Training_Raw2 <- Training_Raw[,-col_filter3]
+Testing_Raw2 <- Testing_Raw[,-col_filter3]
+Validation_Raw2 <- Validation_Raw[,-col_filter3]
+
+# Impute those remaining with missing values
+for(i in 1:ncol(Training_Raw2)){
+  Training_Raw2[is.na(Training_Raw2[,i]), i] <- mean(Training_Raw2[,i], na.rm = TRUE)
+  Testing_Raw2[is.na(Testing_Raw2[,i]), i] <- mean(Training_Raw2[,i], na.rm = TRUE)
+  Validation_Raw2[is.na(Validation_Raw2[,i]), i] <- mean(Training_Raw2[,i], na.rm = TRUE)
+}
+
+
+```
+
+# Pre-processing & Exploratory Data Analysis
+### The Program
+```{r, warning=FALSE, tidy=TRUE, message=FALSE}
+# Look at variables with correlation more than 0.6 to the response
+table(Training_Raw2$classe)
+#summary(Training_Raw2)
+
+# Create new variables with PCA
+set.seed(1254)
+Pre_proc <- preProcess(Training_Raw2[,-93], method="pca")
+
+# Create data sets with PCA variables
+PCA_Train <- data.frame(predict(Pre_proc,Training_Raw2[,-93]), Training_Raw2[,93])
+PCA_Test <- data.frame(predict(Pre_proc,Testing_Raw2[,-93]), Testing_Raw2[,93])
+PCA_Valid <- data.frame(predict(Pre_proc,Validation_Raw2[,-93]), Validation_Raw2[,93])
+
+colnames(PCA_Train)[42] <- "classe"
+colnames(PCA_Test)[42] <- "classe"
+colnames(PCA_Valid)[42] <- "classe"
+
+# Look at PCA variables with a Boxplot
+PCA_Train1 <- PCA_Train[,4:42]
+PCA_Train1a <- PCA_Train1[,c(1:19,39)]
+PCA_Train1b <- PCA_Train1[,c(20:39)]
+
+require(reshape2)
+df.m <- melt(PCA_Train1a, id.var = "classe")
+df.m2 <- melt(PCA_Train1b, id.var = "classe")
+
+require(ggplot2)
+ggplot(data = df.m, aes(x=variable, y=value)) + geom_boxplot(aes(fill=classe)) + coord_cartesian(ylim = c(-5, 5))
+ggplot(data = df.m2, aes(x=variable, y=value)) + geom_boxplot(aes(fill=classe)) + coord_cartesian(ylim = c(-5, 5))
+
+# Factor Variable - User
+prop.table(with(PCA_Train, table(user_name,classe)),1)
+
+# Exclude any other unnecessary variables
+PCA_Train <- PCA_Train[,c(1,4:42)]
+PCA_Test <- PCA_Test[,c(1,4:42)]
+PCA_Valid <- PCA_Valid[,c(1,4:42)]
+
+```
+
+### Summary
+All numeric variables in the data can be summarised by 38 PCA variables.
+Of these 38 variables, there seems to be a clear indication that at least 12 of these variables show some relation to the response.
+
+The factor variable "user_name" shows that the particular user also has some effect on the response.
+This might be due to preference of the user.
+
+# Machine Learning
+### Strategy
+My strategy is build the following models:
+
+- Multinomial GLM
+
+- Decision Tree
+
+- Gradient Boosting Model
+
+
+I will then evaulate each model separately.
+The model that performs at the highest level of accuracy conditional that the training and validation results are within 5%-points from another, is the model that I choose.
+
+Do note that all models should be built within reasonable time, due to this, I have not considered a Random Forest model.
+
+
+### The Program
+```{r message=FALSE, warning=FALSE, tidy=TRUE, cache=TRUE, echo = T, results = 'hide'}
+# Multinomial GLM
+#install.packages("nnet")
+library(nnet)
+library(caret)
+
+set.seed(5463)
+glm_pca <- nnet::multinom(formula = classe ~., data = PCA_Train)
+
+# Decision Tree
+set.seed(9216)
+tree_pca <- train(classe ~ ., method="rpart", data=PCA_Train)
+
+# Gradient Boosting Model
+set.seed(78234)
+boost_pca <- train(classe ~ ., method="gbm", data=PCA_Train)
+```
+
+```{r message=FALSE, warning=FALSE, tidy=TRUE}
+# Evaluate Models
+# Multinomial GLM
+train_glm <- predict(glm_pca, newdata=PCA_Train)
+confusionMatrix(train_glm, PCA_Train$classe)
+
+valid_glm <- predict(glm_pca, newdata=PCA_Valid)
+confusionMatrix(valid_glm, PCA_Valid$classe)
+
+# Decision Tree
+train_tree <- predict(tree_pca, newdata=PCA_Train)
+confusionMatrix(train_tree, PCA_Train$classe)
+
+valid_tree <- predict(tree_pca, newdata=PCA_Valid)
+confusionMatrix(valid_tree, PCA_Valid$classe)
+
+# Gradient Boosting Model
+train_boost <- predict(boost_pca, newdata=PCA_Train)
+confusionMatrix(train_boost, PCA_Train$classe)
+
+valid_boost <- predict(boost_pca, newdata=PCA_Valid)
+confusionMatrix(valid_boost, PCA_Valid$classe)
+
+```
+
+# Final Model
+### Chosen Model
+The Multinomial GLM performaned significantly better than the Decision Tree model with an accuracy of 91.64% on the training set and 91.44% on the validation set.
+
+The Gradient Boosting Model performed better than the Multinomial GLM with an accuracy of 95.79% on the training set and 93.56% on the validation set.
+There is a minor risk that the GBM is slightly more unstable compared to the Multinomial GLM, but given that it is within 5%-points in terms of training vs validation accuracy.
+
+Therefor, my model of choice is the GBM.
+
+### Predict the Out of time sample
+This step is to apply the chosen model to the test set provided.
+
+### The Program
+```{r, warning=FALSE, tidy=TRUE, message=FALSE}
+# Gradient Boosting Model
+test_boost <- predict(boost_pca, newdata=PCA_Test)
+
+test_boost
+```
